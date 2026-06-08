@@ -31,4 +31,3 @@ jobs:
         with:
           name: page-feedback-report
           path: output/
-          archive: false
