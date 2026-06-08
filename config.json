@@ -1,4 +1,10 @@
 {
+  "settings": {
+    "max_workers": 8,
+    "request_delay": 0,
+    "timeout_seconds": 30
+  },
+
   "sitemaps": [
     {
       "url": "https://www.canada.ca/en/public-safety-canada.sitemap.xml",
@@ -26,10 +32,12 @@
     },
     {
       "name": "Date Modified",
-      "type": "contains",
-      "value": "Date modified:"
+      "type": "extract",
+      "method": "date_modified"
     }
   ],
 
-  "output_file": "output/page_feedback_report.csv"
+  "output": {
+    "file": "output/page_feedback_report.csv"
+  }
 }
