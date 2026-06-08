@@ -12,8 +12,11 @@ from bs4 import BeautifulSoup
 # ----------------------------
 
 PUBLIC_SAFETY_SITEMAP = "https://www.canada.ca/en/public-safety-canada.sitemap.xml"
-SERVICES_SITEMAP = "https://www.canada.ca/en/services.sitemap.xml"
+PUBLIC_SAFETY_EXCLUDE_PREFIXES = [
+    "https://www.canada.ca/en/public-safety-canada/news/"
+]
 
+SERVICES_SITEMAP = "https://www.canada.ca/en/services.sitemap.xml"
 SERVICES_PREFIXES = [
     "https://www.canada.ca/en/services/defence/nationalsecurity",
     "https://www.canada.ca/en/services/defence/securingborder",
@@ -54,6 +57,10 @@ def is_english_url(url: str) -> bool:
     """
     path = urlparse(url).path.lower()
     return path == "/en.html" or path.startswith("/en/")
+
+
+def is_excluded_public_safety_url(url: str) -> bool:
+    return any(url.startswith(prefix) for prefix in PUBLIC_SAFETY_EXCLUDE_PREFIXES)
 
 
 def is_services_target_url(url: str) -> bool:
@@ -173,7 +180,7 @@ def inspect_page(session: requests.Session, url: str):
 def build_target_url_list(session: requests.Session):
     # 1) Public Safety sitemap -> English only
     public_safety_urls = collect_urls_from_sitemap(session, PUBLIC_SAFETY_SITEMAP)
-    public_safety_urls = [u for u in public_safety_urls if is_english_url(u)]
+    public_safety_urls = [u for u in public_safety_urls if is_english_url(u) and not is_excluded_public_safety_url(u)]
 
     # 2) Services sitemap -> English only + requested prefixes only
     services_urls = collect_urls_from_sitemap(session, SERVICES_SITEMAP)
