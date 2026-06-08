@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ----------------------------
 # Configuration
@@ -36,7 +37,7 @@ HEADERS = {
 }
 
 TIMEOUT_SECONDS = 30
-REQUEST_DELAY_SECONDS = 0.2
+REQUEST_DELAY_SECONDS = 0
 
 
 # ----------------------------
@@ -177,6 +178,24 @@ def inspect_page(session: requests.Session, url: str):
         }
 
 
+def inspect_page_threadsafe(url: str):
+    session = requests.Session()
+    return inspect_page(session, url)
+
+
+def process_urls_parallel(urls, max_workers=8):
+    results = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(inspect_page_threadsafe, url) for url in urls]
+
+        for i, future in enumerate(as_completed(futures), start=1):
+            result = future.result()
+            print(f"[{i}/{len(urls)}] Completed: {result['URL']}")
+            results.append(result)
+
+    return results
+
 def build_target_url_list(session: requests.Session):
     # 1) Public Safety sitemap -> English only
     public_safety_urls = collect_urls_from_sitemap(session, PUBLIC_SAFETY_SITEMAP)
@@ -210,11 +229,7 @@ def main():
     target_urls = build_target_url_list(session)
     print(f"Found {len(target_urls)} target URLs from sitemap sources.")
 
-    rows = []
-    for i, url in enumerate(target_urls, start=1):
-        print(f"[{i}/{len(target_urls)}] Checking: {url}")
-        rows.append(inspect_page(session, url))
-        time.sleep(REQUEST_DELAY_SECONDS)
+    rows = process_urls_parallel(target_urls, max_workers=8)
 
     write_csv(rows)
     print(f"Done. Report written to: {OUTPUT_FILE}")
