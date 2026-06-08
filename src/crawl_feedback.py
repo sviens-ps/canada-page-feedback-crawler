@@ -211,7 +211,59 @@ def write_csv(rows, config):
         writer.writeheader()
         writer.writerows(rows)
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
+
+def write_excel(rows, config):
+    output_file = config["output"]["file"].replace(".csv", ".xlsx")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Crawl Report"
+
+    # Columns
+    fieldnames = ["Title", "URL"] + [c["name"] for c in config["checks"]]
+
+    # Header row
+    ws.append(fieldnames)
+
+    # Apply bold to header
+    bold_font = Font(bold=True)
+    for col_num, col_name in enumerate(fieldnames, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = bold_font
+
+    # Add data
+    for row in rows:
+        ws.append([row.get(col, "") for col in fieldnames])
+
+    # Auto column width
+    for col_num, col_name in enumerate(fieldnames, 1):
+        column_letter = get_column_letter(col_num)
+        max_length = len(col_name)
+
+        for row in rows[:100]:  # limit scan for performance
+            value = str(row.get(col_name, ""))
+            if len(value) > max_length:
+                max_length = len(value)
+
+        ws.column_dimensions[column_letter].width = min(max_length + 2, 60)
+
+    # Freeze header row
+    ws.freeze_panes = "A2"
+
+    # Add autofilter
+    ws.auto_filter.ref = ws.dimensions
+
+    # Ensure output folder exists
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    wb.save(output_file)
+
+    print(f"Excel report written to: {output_file}")
+    
 # ----------------------------
 # Main
 # ----------------------------
@@ -226,6 +278,7 @@ def main():
     rows = process_urls_parallel(target_urls, config)
 
     write_csv(rows, config)
+    write_excel(rows, config)
 
     print("Done.")
 
