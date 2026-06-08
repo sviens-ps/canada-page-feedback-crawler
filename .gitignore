@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# This keeps local environment files and generated reports out of version control.
+*.pyc
+*utput/*.csv
+
 # C extensions
 *.so
 
