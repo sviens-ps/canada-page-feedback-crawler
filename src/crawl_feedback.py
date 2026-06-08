@@ -1,90 +1,50 @@
 import csv
 import os
 import time
+import json
 from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 # ----------------------------
-# Configuration
+# Load config
 # ----------------------------
 
-PUBLIC_SAFETY_SITEMAP = "https://www.canada.ca/en/public-safety-canada.sitemap.xml"
-PUBLIC_SAFETY_EXCLUDE_PREFIXES = [
-    "https://www.canada.ca/en/public-safety-canada/news/"
-]
-
-SERVICES_SITEMAP = "https://www.canada.ca/en/services.sitemap.xml"
-SERVICES_PREFIXES = [
-    "https://www.canada.ca/en/services/defence/nationalsecurity",
-    "https://www.canada.ca/en/services/defence/securingborder",
-    "https://www.canada.ca/en/services/policing",
-]
-
-FEEDBACK_MARKER = (
-    'data-ajax-replace="/etc/designs/canada/wet-boew/assets/feedback/page-feedback-en.html"'
-)
-
-OUTPUT_DIR = "output"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "page_feedback_report.csv")
-
-HEADERS = {
-    "User-Agent": "canada-page-feedback-crawler/1.0",
-    "Accept-Language": "en-CA,en;q=0.9",
-}
-
-TIMEOUT_SECONDS = 30
-REQUEST_DELAY_SECONDS = 0
+def load_config():
+    with open("config.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 # ----------------------------
 # Helpers
 # ----------------------------
 
+def is_english_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path == "/en.html" or path.startswith("/en/")
+
+
+def fetch_text(session, url, timeout):
+    response = session.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
 def strip_namespace(tag: str) -> str:
-    """Remove XML namespace from a tag name."""
     if "}" in tag:
         return tag.split("}", 1)[1]
     return tag
 
 
-def is_english_url(url: str) -> bool:
-    """
-    Keep English pages only.
-    For canada.ca, this typically means /en/... or /en.html
-    """
-    path = urlparse(url).path.lower()
-    return path == "/en.html" or path.startswith("/en/")
-
-
-def is_excluded_public_safety_url(url: str) -> bool:
-    return any(url.startswith(prefix) for prefix in PUBLIC_SAFETY_EXCLUDE_PREFIXES)
-
-
-def is_services_target_url(url: str) -> bool:
-    """Keep only the requested services subsections."""
-    return any(url.startswith(prefix) for prefix in SERVICES_PREFIXES)
-
-
-def normalize_text(text: str) -> str:
-    return " ".join(text.split()).strip()
-
-
-def fetch_text(session: requests.Session, url: str) -> str:
-    response = session.get(url, headers=HEADERS, timeout=TIMEOUT_SECONDS)
-    response.raise_for_status()
-    return response.text
-
+# ----------------------------
+# Sitemap processing
+# ----------------------------
 
 def parse_sitemap(xml_text: str):
-    """
-    Returns:
-      ("urlset", [page URLs]) or
-      ("sitemapindex", [child sitemap URLs])
-    """
     root = ET.fromstring(xml_text)
     root_name = strip_namespace(root.tag)
 
@@ -93,146 +53,181 @@ def parse_sitemap(xml_text: str):
         if strip_namespace(elem.tag) == "loc" and elem.text:
             locs.append(elem.text.strip())
 
-    if root_name == "urlset":
-        return "urlset", locs
-    elif root_name == "sitemapindex":
-        return "sitemapindex", locs
-    else:
-        raise ValueError(f"Unsupported sitemap root element: {root_name}")
+    return root_name, locs
 
 
-def collect_urls_from_sitemap(session: requests.Session, sitemap_url: str):
-    """
-    Supports both:
-      - regular sitemap files (<urlset>)
-      - sitemap index files (<sitemapindex>)
-    """
-    sitemap_queue = [sitemap_url]
-    seen_sitemaps = set()
-    page_urls = []
-
-    while sitemap_queue:
-        current_sitemap = sitemap_queue.pop(0)
-
-        if current_sitemap in seen_sitemaps:
-            continue
-
-        seen_sitemaps.add(current_sitemap)
-
-        xml_text = fetch_text(session, current_sitemap)
-        sitemap_type, locs = parse_sitemap(xml_text)
-
-        if sitemap_type == "sitemapindex":
-            sitemap_queue.extend(locs)
-        elif sitemap_type == "urlset":
-            page_urls.extend(locs)
-
-        time.sleep(REQUEST_DELAY_SECONDS)
-
-    return page_urls
-
-
-def unique_urls(urls):
+def collect_urls_from_sitemap(session, sitemap_url, timeout, delay):
+    queue = [sitemap_url]
     seen = set()
-    ordered = []
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            ordered.append(url)
-    return ordered
+    urls = []
+
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+
+        xml_text = fetch_text(session, current, timeout)
+        root_name, locs = parse_sitemap(xml_text)
+
+        if root_name == "sitemapindex":
+            queue.extend(locs)
+        elif root_name == "urlset":
+            urls.extend(locs)
+
+        time.sleep(delay)
+
+    return urls
 
 
-def extract_title(html: str) -> str:
-    """
-    Extract page title from HTML.
-    Beautiful Soup supports using soup.title or tag search methods
-    for HTML parsing.
-    """
+def build_target_url_list(session, config):
+    all_urls = []
+
+    for sitemap in config["sitemaps"]:
+        raw_urls = collect_urls_from_sitemap(
+            session,
+            sitemap["url"],
+            config["settings"]["timeout_seconds"],
+            config["settings"]["request_delay"]
+        )
+
+        filtered = []
+
+        for url in raw_urls:
+            if not is_english_url(url):
+                continue
+
+            if sitemap["include_prefixes"]:
+                if not any(url.startswith(p) for p in sitemap["include_prefixes"]):
+                    continue
+
+            if any(url.startswith(p) for p in sitemap["exclude_prefixes"]):
+                continue
+
+            filtered.append(url)
+
+        all_urls.extend(filtered)
+
+    return list(dict.fromkeys(all_urls))
+
+
+# ----------------------------
+# Extraction logic
+# ----------------------------
+
+def extract_date_modified(soup):
+    dt_elements = soup.find_all("dt")
+
+    for dt in dt_elements:
+        if "Date modified:" in dt.get_text():
+            dd = dt.find_next_sibling("dd")
+            if dd:
+                return dd.get_text(strip=True)
+
+    return "Not found"
+
+
+def run_checks(html, checks):
+    results = {}
     soup = BeautifulSoup(html, "html.parser")
 
-    if soup.title and soup.title.get_text():
-        return normalize_text(soup.title.get_text())
+    for check in checks:
+        name = check["name"]
 
-    og_title = soup.find("meta", attrs={"property": "og:title"})
-    if og_title and og_title.get("content"):
-        return normalize_text(og_title["content"])
+        if check["type"] == "contains":
+            results[name] = "Yes" if check["value"] in html else "No"
 
-    return ""
+        elif check["type"] == "extract":
+            if check["method"] == "date_modified":
+                results[name] = extract_date_modified(soup)
+            else:
+                results[name] = "Unsupported method"
+
+        else:
+            results[name] = "Unsupported type"
+
+    return results
 
 
-def inspect_page(session: requests.Session, url: str):
+# ----------------------------
+# Page inspection
+# ----------------------------
+
+def inspect_page(url, checks, timeout):
+    session = requests.Session()
+
     try:
-        html = fetch_text(session, url)
-        title = extract_title(html) or "[No title found]"
-        has_feedback = "Yes" if FEEDBACK_MARKER in html else "No"
-        return {
-            "Title": title,
-            "URL": url,
-            "Page Feedback Yes/No": has_feedback,
+        html = fetch_text(session, url, timeout)
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        result = {
+            "Title": soup.title.get_text(strip=True) if soup.title else "[No title found]",
+            "URL": url
         }
+
+        result.update(run_checks(html, checks))
+        return result
+
     except Exception as exc:
         return {
             "Title": f"[Error: {type(exc).__name__}]",
             "URL": url,
-            "Page Feedback Yes/No": "No",
+            **{check["name"]: "Error" for check in checks}
         }
 
 
-def inspect_page_threadsafe(url: str):
-    session = requests.Session()
-    return inspect_page(session, url)
-
-
-def process_urls_parallel(urls, max_workers=8):
+def process_urls_parallel(urls, config):
     results = []
+    max_workers = config["settings"]["max_workers"]
+    timeout = config["settings"]["timeout_seconds"]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(inspect_page_threadsafe, url) for url in urls]
+        futures = [
+            executor.submit(inspect_page, url, config["checks"], timeout)
+            for url in urls
+        ]
 
         for i, future in enumerate(as_completed(futures), start=1):
             result = future.result()
-            print(f"[{i}/{len(urls)}] Completed: {result['URL']}")
+            print(f"[{i}/{len(urls)}] {result['URL']}")
             results.append(result)
 
     return results
 
-def build_target_url_list(session: requests.Session):
-    # 1) Public Safety sitemap -> English only
-    public_safety_urls = collect_urls_from_sitemap(session, PUBLIC_SAFETY_SITEMAP)
-    public_safety_urls = [u for u in public_safety_urls if is_english_url(u) and not is_excluded_public_safety_url(u)]
 
-    # 2) Services sitemap -> English only + requested prefixes only
-    services_urls = collect_urls_from_sitemap(session, SERVICES_SITEMAP)
-    services_urls = [
-        u for u in services_urls
-        if is_english_url(u) and is_services_target_url(u)
-    ]
+# ----------------------------
+# Output
+# ----------------------------
 
-    return unique_urls(public_safety_urls + services_urls)
+def write_csv(rows, config):
+    output_file = config["output"]["file"]
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
+    fieldnames = ["Title", "URL"] + [c["name"] for c in config["checks"]]
 
-def write_csv(rows):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["Title", "URL", "Page Feedback Yes/No"]
-        )
+    with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
+# ----------------------------
+# Main
+# ----------------------------
+
 def main():
+    config = load_config()
     session = requests.Session()
 
-    target_urls = build_target_url_list(session)
-    print(f"Found {len(target_urls)} target URLs from sitemap sources.")
+    target_urls = build_target_url_list(session, config)
+    print(f"Found {len(target_urls)} target URLs.")
 
-    rows = process_urls_parallel(target_urls, max_workers=8)
+    rows = process_urls_parallel(target_urls, config)
 
-    write_csv(rows)
-    print(f"Done. Report written to: {OUTPUT_FILE}")
+    write_csv(rows, config)
+
+    print("Done.")
 
 
 if __name__ == "__main__":
