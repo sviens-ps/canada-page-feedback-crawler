@@ -26,8 +26,9 @@ jobs:
       - name: Run crawler
         run: python src/crawl_feedback.py
 
-      - name: Upload CSV artifact
+      - name: Upload CSV/XLSX artifacts
         uses: actions/upload-artifact@v7
         with:
           name: page-feedback-report
-          path: output/page_feedback_report.csv
+          path: output/
+          archive: false
