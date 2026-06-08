@@ -116,13 +116,10 @@ def build_target_url_list(session, config):
 # ----------------------------
 
 def extract_date_modified(soup):
-    dt_elements = soup.find_all("dt")
+    tag = soup.find("meta", attrs={"name": "dcterms.modified"})
 
-    for dt in dt_elements:
-        if "Date modified:" in dt.get_text():
-            dd = dt.find_next_sibling("dd")
-            if dd:
-                return dd.get_text(strip=True)
+    if tag and tag.get("content"):
+        return tag["content"].strip()
 
     return "Not found"
 
