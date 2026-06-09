@@ -11,19 +11,10 @@ Manual Python crawler that:
   - /en/services/defence/securingborder
   - /en/services/policing
 - checks for the English page feedback widget snippet
-- exports results to CSV
+- exports results to XLSX
 
 ## Output columns
-
 - Title
 - URL
 - Page Feedback Yes/No
-
-## Run locally
-
-### Windows PowerShell
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python src/crawl_feedback.py
+- Last dat modified
