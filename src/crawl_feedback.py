@@ -225,6 +225,9 @@ def write_excel(rows, config):
     ws.title = "Page Details"
 
     fieldnames = ["Title", "URL"] + [c["name"] for c in config["checks"]]
+    
+    # Write header row
+    ws.append(fieldnames)
 
     # Sort rows:
     # 1. Page Feedback = Yes first
