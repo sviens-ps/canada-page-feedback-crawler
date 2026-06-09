@@ -197,62 +197,87 @@ def process_urls_parallel(urls, config):
 # Output
 # ----------------------------
 
-def write_csv(rows, config):
-    output_file = config["output"]["file"]
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
-    fieldnames = ["Title", "URL"] + [c["name"] for c in config["checks"]]
-
-    with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
+from datetime import datetime
+
+def parse_date_safe(value):
+    """
+    Converts YYYY-MM-DD → datetime object.
+    Returns None if invalid or missing.
+    """
+    if not value or value == "Not found":
+        return None
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except:
+        return None
 
 def write_excel(rows, config):
     output_file = config["output"]["file"].replace(".csv", ".xlsx")
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Crawl Report"
+    ws.title = "Page Details"
 
-    # Columns
     fieldnames = ["Title", "URL"] + [c["name"] for c in config["checks"]]
 
-    # Header row
-    ws.append(fieldnames)
+    # Sort rows:
+    # 1. Page Feedback = Yes first
+    # 2. Then by Date Modified (newest first)
+    # 3. "Not found" goes last
+    rows.sort(
+        key=lambda r: (
+            r.get("Page Feedback") != "Yes",  # False (Yes) comes before True
+            parse_date_safe(r.get("Date Modified")) is None,  # valid dates first
+            parse_date_safe(r.get("Date Modified")) or datetime.min
+        ),
+        reverse=False  # don't reverse (we control ordering manually)
+    )
 
-    # Apply bold to header
-    bold_font = Font(bold=True)
-    for col_num, col_name in enumerate(fieldnames, 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.font = bold_font
-
-    # Add data
+    # Write data rows
     for row in rows:
         ws.append([row.get(col, "") for col in fieldnames])
 
-    # Auto column width
+    # Auto column width (approximate)
     for col_num, col_name in enumerate(fieldnames, 1):
         column_letter = get_column_letter(col_num)
         max_length = len(col_name)
 
-        for row in rows[:100]:  # limit scan for performance
+        for row in rows[:100]:  # limit for performance
             value = str(row.get(col_name, ""))
             if len(value) > max_length:
                 max_length = len(value)
 
         ws.column_dimensions[column_letter].width = min(max_length + 2, 60)
 
-    # Freeze header row
+    # Freeze header
     ws.freeze_panes = "A2"
 
-    # Add autofilter
-    ws.auto_filter.ref = ws.dimensions
+    # Create Excel Table
+    table_ref = f"A1:{get_column_letter(len(fieldnames))}{len(rows) + 1}"
+    
+    table = Table(
+        displayName="tbl_PageDetails",
+        ref=table_ref
+    )
+
+    # Add table style
+    style = TableStyleInfo(
+        name="TableStyleMedium9",  # clean blue style
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False
+    )
+
+    table.tableStyleInfo = style
+
+    ws.add_table(table)
 
     # Ensure output folder exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -274,11 +299,9 @@ def main():
 
     rows = process_urls_parallel(target_urls, config)
 
-    write_csv(rows, config)
     write_excel(rows, config)
 
     print("Done.")
-
 
 if __name__ == "__main__":
     main()
